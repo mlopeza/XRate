@@ -1,100 +1,108 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
+import argparse
+import os
 import requests
-import sys
 import smtplib
-import json
+import sys
+
 from datetime import datetime
-import time
 
 
+def _connect(func):
+    """
+    Decorator to ensure that we always connect just before trying to send an e-mail.
+    """
+    def wrapper(self, *args, **kwargs):
+        if not self._server:
+            self._server = smtplib.SMTP(self.server)
+            self._server.starttls()
+            self._server.login(self.username, self.password)
+        return func(self, *args, **kwargs)
+    return wrapper
 
-def noticeEMail(rate, usr, psw, fromaddr, toaddr):
+class Mailer(object):
 
-    # Initialize SMTP server
-    server=smtplib.SMTP('smtp.gmail.com:587')
-    server.starttls()
-    server.login(usr,psw)
-
-    # Send email
-    senddate=datetime.strftime(datetime.now(), '%Y-%m-%d')
-    subject="Great Rate right now"
-    m="Date: %s\r\nFrom: %s\r\nTo: %s\r\nSubject: %s\r\nX-Mailer: My-Mail\r\n\r\n" % (senddate, fromaddr, toaddr, subject)
-    msg='Rate:\n'+str(rate)
-
-    server.sendmail(fromaddr, toaddr, m+msg)
-    server.quit()
-
-def get_info():
-    result = requests.get('https://www.xoom.com/ajax/options-xfer-amount-ajax?receiveCountryCode=MX&sendAmount=25&_=1400631011779')
-    return result.json()['result']
-
-
-def get_uniteller():
-    from pyvirtualdisplay import Display
-    from selenium import webdriver
-    from selenium.webdriver.common.keys import Keys
-    display = Display(visible=1, size=(1024, 768))
-    display.start()
-    profile = webdriver.FirefoxProfile("/home/mario/.mozilla/firefox/b0l6x1qu.default")
-    browser = webdriver.Firefox(profile)
-
-    browser.get('https://send.uniteller.com/jsps/LoginPage.action?request_locale=es&wlp_name=Uniteller')
-    elem = browser.find_element_by_name('email')
-    #TODO: Don't hardcode user
-    elem.send_keys('user@mail.com')
-    time.sleep(5)
-    browser.find_element_by_id('proceed').click()
-    #TODO: Don't use a hardcoded password
-    browser.find_element_by_id('password').send_keys("HARDCODED_PASSWORD")
-    time.sleep(5)
-    browser.find_element_by_id('proceed').click()
-    answer = browser.find_element_by_id("firstAnswer")
-    #TODO: Make this configurable (Questions)
-    if answer is not None:
-        question = browser.find_element_by_class_name('email_box')
-        question = question.text
-        if question[9:] == u"¿Cuál era tu apodo de la infancia?":
-            response = ""
-        elif question[9:] == u"¿Cuál es el nombre de tu mejor amigo de la infancia?":
-            response = ""
-        else:
-            response = "Windsor"
-    browser.find_element_by_id('firstAnswer').send_keys(response)
-    browser.find_element_by_id('registerComputerCheck').click()
-    time.sleep(5)
-    browser.find_element_by_id('proceed').click()
-
-    exchange_rate = browser.find_element_by_xpath('//*[@id="container"]/div[1]/div[2]/div[1]/ul/li[8]/strong').text
-    exchange_rate = exchange_rate.split('=')[1].split(' ')[0]
-    browser.get("https://send.uniteller.com/jsps/LogoutAction.action")
-    time.sleep(5)
-    browser.quit()
-    display.stop()
-    return exchange_rate
+    def __init__(self, username, password, server):
+        self.username = username
+        self.password = password
+        self.server = server
+        self._server = None
 
 
-def get_rate():
-    result = get_info()
-    return result['fxRate']
+    @_connect
+    def send_mail(self, subject, message, to_address, date=None):
+        if not date:
+            date = datetime.now()
+        senddate = datetime.strftime(date, '%Y-%m-%d')
+
+        formatted_message = "Date: {0}\r\nFrom: {1}\r\nTo: {2}\r\nSubject: {3}\r\nX-Mailer: My-Mail\r\n\r\n{4}".format(
+            senddate, self.username, to_address, subject, message)
+        self._server.sendmail(self.username, to_address, formatted_message)
+
+    def close(self):
+        # There's no standard way of checking for an open connection, so we use a
+        # common attribute in the class to verify if the'res an open connection.
+        if self._server and self._server.file:
+            self._server.close()
+
+
+class XOOM(object):
+    SITE = "https://xoom.com"
+
+    def __init__(self):
+        self.name = "XOOM"
+        self._rate = None
+
+    @property
+    def rate(self):
+        if self._rate:
+            return self._rate
+        url = os.path.join(self.SITE,
+                           "ajax",
+                           "options-xfer-amount-ajax?receiveCountryCode=MX&sendAmount=25&_=1400631011779")
+        self._rate = float(requests.get(url).json()['result']['fxRate'])
+        return self._rate
+
+    def __str__(self):
+        return "{0}: {1}".format(self.name, self.rate)
 
 def main():
-    date_now = str(datetime.now())
-    rate_xoom = get_rate()
-    #rate_uniteller = get_uniteller()
-    rate_string = date_now+ " XOOM       " + str(rate_xoom) + "\n"
-    print rate_string
-    #TODO: Make The desired rate configurable
-    if float(rate_xoom) < 12.95:
-        return 0
-    #TODO: Send user and password as parameters
-    usr=None
-    psw=None
-    fromaddr=usr
-    toaddr=usr
-    if usr and psw:
-        # Send notification email
-        noticeEMail(rate_string, usr, psw, fromaddr, toaddr)
+    parser = argparse.ArgumentParser(description="Send e-mail with current exchange rates for MXN/USD")
+    parser.add_argument('--to', help='Where to send exchange rates, if not provided they will be printed out.',
+                        default=None)
+    parser.add_argument('--from-email',
+                        help='From which e-mail will the results be sent out from.', default=None)
+    parser.add_argument('--password',
+                        help='Password for the e-mail that will be used to send the exchange rates.',
+                        default=None)
+    parser.add_argument('--smtp-server',
+                        help='SMTP server to connect to.', default=None)
+    parser.add_argument('--subject', default="Exchange Rates.")
+    parser.add_argument('--minimum', type=float, help="Minimum amount you want in the exchange rate to consider it to be "
+                                                 "sent out. As an example, you might want to receive notificatiosn only"
+                                                 " if the exchange rate is higher than 20 MXN",
+                        default=0)
+    args = parser.parse_args()
+
+    mailer = None
+    if args.to and args.from_email and args.password:
+        mailer = Mailer(args.from_email, args.password, args.smtp_server)
+
+    # For now we only have XOOM, so concatenations is not an issue
+    xoom = XOOM()
+    message = ""
+    if xoom.rate > args.minimum:
+        message = message + "\n" + str(xoom)
+
+    # Remove extra newlines
+    message = message.lstrip()
+
+    if mailer:
+        mailer.send_mail(args.subject, message, args.to)
+        mailer.close()
+    else:
+        print(message)
 
 if __name__ == "__main__":
     sys.exit(main())
