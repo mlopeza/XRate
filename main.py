@@ -22,7 +22,9 @@ def _connect(func):
     return wrapper
 
 class Mailer(object):
-
+    """
+    Create a connection to an SMTP server to be able to send e-mails.
+    """
     def __init__(self, username, password, server):
         self.username = username
         self.password = password
@@ -32,6 +34,9 @@ class Mailer(object):
 
     @_connect
     def send_mail(self, subject, message, to_address, date=None):
+        """
+        Send an e-mail using the current connection.
+        """
         if not date:
             date = datetime.now()
         senddate = datetime.strftime(date, '%Y-%m-%d')
@@ -42,12 +47,15 @@ class Mailer(object):
 
     def close(self):
         # There's no standard way of checking for an open connection, so we use a
-        # common attribute in the class to verify if the'res an open connection.
+        # common attribute in the class to verify if there's an open connection.
         if self._server and self._server.file:
             self._server.close()
 
 
 class XOOM(object):
+    """
+    Retrieve Exchange Rate from the XOOM site
+    """
     SITE = "https://xoom.com"
 
     def __init__(self):
@@ -85,6 +93,8 @@ def main():
                         default=0)
     args = parser.parse_args()
 
+    # If all the conditions are met to send an e-mail we can use the Mailer object to send it, otherwise we will just
+    # print the result to stdout.
     mailer = None
     if args.to and args.from_email and args.password:
         mailer = Mailer(args.from_email, args.password, args.smtp_server)
@@ -102,6 +112,7 @@ def main():
         mailer.send_mail(args.subject, message, args.to)
         mailer.close()
     else:
+        # We weren't able to create a mailer object so we print to stdout.
         print(message)
 
 if __name__ == "__main__":
